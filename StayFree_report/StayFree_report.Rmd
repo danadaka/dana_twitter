@@ -1,0 +1,144 @@
+---
+title: "StayFree Report"
+author: "Danagul Kaliyeva"
+date: "6/22/2020"
+output: html_document
+---
+
+StayFree - Screen Time Tracker & Limit App Usage is a Self Control, Productivity and Phone Addiction Controller app that allow you to show how much time you spend on your smartphone and helps you focus by restricting the usage of apps. You can set usage limits for your apps and receive alerts when exceeding those usage limit. You can also view the details of your usage and statistics on your usage history. (Source: Google Play)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+Load the libraries
+
+```{r libraries}
+require(tidyverse) #for tidy format operations
+require(hms) #for time related operatins
+require(patchwork) #for multiple plots
+
+
+
+```
+
+Clean the data
+
+```{r data, echo=TRUE}
+report_raw <-
+  readxl::read_excel("HistoryReport (2).xls") 
+
+report_raw
+
+report_clean <- 
+  report_raw %>%
+  #drop the last column because it is unnecessiry
+  select(-9) %>% 
+  rename(app_name = 1) %>%
+  #"Общее" is not name of an application 
+  filter(app_name != "Общее") %>%
+  #each column except the first one represents time spent on each application in one day, so I pivoted them
+  pivot_longer(cols = 2:8, names_to = "day", values_to = "time") %>%
+  #time is given in the text format, so converted it to time format
+  #there are only there variants of time values: only secnds "%Sс", minutes and seconds "%Mм %Sс" and hours, minutes and seconds"%Hч %Mм %Sс"
+  mutate(time = case_when(!str_detect(time, "м") ~ as.POSIXct(x = time, format = "%Sс"),
+                          str_detect(time, "ч") ~ as.POSIXct(x = time, format = "%Hч %Mм %Sс"),
+                          !str_detect(time, "с") ~ as.POSIXct(x = time, format = "%Sм"),
+                          TRUE ~ as.POSIXct(x = time, format = "%Mм %Sс")),
+         #as.POSIXct convertes a character to Datetime
+         #but I want to keep only time and keep it as duration in hours
+         time = as.numeric(as_hms(time))/3600,
+         #not to confuse why the week starts from "Вторник" ("Tuesday") I keep it in date format
+         day = case_when(day == "Вторник" ~ as.Date("2020-06-16"),
+                         day == "Среда" ~ as.Date("2020-06-17"),
+                         day == "Четверг" ~ as.Date("2020-06-18"),
+                         day == "Пятница" ~ as.Date("2020-06-19"),
+                         day == "Cуббота" ~ as.Date("2020-06-20"),
+                         day == "Воскресенье" ~ as.Date("2020-06-21"),
+                         day == "Понедельник" ~ as.Date("2020-06-22")),
+         #some names are in russian
+         app_name = case_when(app_name == "Твиттер" ~ "Twitter",
+                              app_name == "Калькулятор" ~ "Calculator",
+                              app_name == "Meet" ~ "Google Meet",
+                              app_name == "Телефон" ~ "Telephone",
+                              app_name == "Галерея" ~ "Gallery",
+                              app_name == "Заметки" ~ "Notes",
+                              app_name == "7 Минут Медитации" ~ "7 Min of Meditation",
+                              app_name == "Wolt" ~ "Wolt Delivery",
+                              app_name == "Часы" ~ "Clock",
+                              TRUE ~ app_name)) %>%
+  #time is NA in the rows that contain information about creation date of an app so just ignore them
+  filter(!is.na(time))
+
+report_clean
+```
+Visualize
+
+```{r echo=TRUE, fig.height=8, fig.width=10}
+#Set the colors of most popular apps
+cols <- c("Chrome" = "#296E35", "Telephone" = "#B29CE7", "YouTube" = "#E1132B", "Calculator" = "23232F",
+          "Gallery" = "#E76B00", "Notes"= "#F9EDA8", "Google Meet" = "#009E73", "Instagram"= "#F93E58", 
+          "7 Min of Meditation" = "#0072B2", "Twitter" = "#4186D3", "WhatsApp" = "#41A128", 
+          "Wolt Delivery" = "#E69F00", "Telegram" = "#56B4E9", "PocketBook" = "darkgreen", "Clock" = "#AE9CE7")
+
+plot1 <-
+  report_clean %>%
+  group_by(app_name) %>%
+  #this is necessary to keep those apps that I have used at least one hour during the last week
+  mutate(total = sum(time)) %>%
+  ungroup() %>%
+  filter(time != 0, total >= 1) %>%
+  ggplot() +
+  geom_line(aes(x = day, y = time, col = app_name), size = 2) +
+  labs(title = "Time spent (in hours) on some mobile apps in the previous week", 
+       subtitle = "Only apps with at least 1 hour of total usage time are taken", 
+       col = "", 
+       x = "", 
+       y = "", 
+       caption = "Data: StayFree Report") +
+  facet_wrap(~app_name) +
+  #use the clors that was created above
+  scale_colour_manual(values = cols, aesthetics = "col") +
+  theme_light() &
+  theme(text = element_text('Mono'))
+
+plot1
+```
+
+```{r fig.height=8, fig.width=10}
+plot2 <-
+  report_clean %>%
+  mutate(day = weekdays(day)) %>%
+  group_by(day) %>%
+  top_n(wt = time, 5) %>%
+  nest() %>%
+  ungroup() %>%
+  #days do not appear in order so I used fct_relevel
+  mutate(day = as.factor(day),
+         day = fct_relevel(day, "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Monday")) %>%
+  arrange(day) %>%
+  mutate(graph = map2(day, data, 
+                      function(day, data) 
+                        data %>% 
+                        ggplot() + 
+                        geom_col(aes(x = fct_reorder(app_name, time), y =time, fill = app_name), show.legend = FALSE) + 
+                        coord_flip() + 
+                        labs(title = day, y = "", x = "") + 
+                        scale_colour_manual(values = cols, aesthetics = "fill") + 
+                        theme_light() &
+                        theme(text = element_text('Mono')))) %>%
+  pull(graph) %>%
+  wrap_plots(ncol = 4) + 
+  plot_annotation(title = "MOSTLY USED mobile apps in the previous week", 
+                  subtitle = "Time spent is given in hours", 
+                  caption = "Data: StayFree Report", 
+                  theme = theme(plot.title = element_text(size = 18))) &
+  theme(text = element_text('Mono'))
+  
+plot2
+```
+
