@@ -1,2 +1,2 @@
 # dana_twitter
-Code that use for my twitter posts.
+Code chunks that I use for my twitter posts.
